@@ -1,46 +1,86 @@
-const context = new AudioContext();
-const osc = new OscillatorNode(context);
-const amp = new GainNode(context, { gain: 0.1 });
-// osc.connect(amp).connect(context.destination);
-// osc.start();
+import DrumCell from "./DrumCell.js";
 
-let toggler = true;
-
-window.addEventListener("load", () => {
-  const buttonEl = document.getElementById("start-audio");
-  buttonEl.disabled = false;
-  buttonEl.addEventListener("click", () => {
-    if (toggler === true) {
-      context.resume();
-    } else {
-      context.suspend();
-    }
-    toggler = !toggler;
-  });
-});
-
-const playSample = (audioBuffer, audioContext) => {
-  const bufferSource = new AudioBufferSourceNode(audioContext, {
-    buffer: audioBuffer,
-  });
-  const amp = new GainNode(audioContext);
-  bufferSource.connect(amp).connect(audioContext.destination);
-  bufferSource.start();
+const getAudioBufferByFileName = async (
+  audioContext,
+  fileName,
+  directoryHandle
+) => {
+  const fileHandle = await directoryHandle.getFileHandle(fileName);
+  const file = await fileHandle.getFile();
+  const arrayBuffer = await file.arrayBuffer();
+  return await audioContext.decodeAudioData(arrayBuffer);
 };
 
-class DrumCell {
-  constructor(outputNode, audioBuffer) {
-    this._context = outputNode.context;
-    this._buffer = audioBuffer;
-    this._outputNode = outputNode;
+const buildDrumCellMap = async (outputNode, directoryHandle) => {
+  const drumCellMap = {};
+  for await (const entry of directoryHandle.values()) {
+    if (entry.name.startsWith("drum") && entry.name.endsWith("mp3")) {
+      const audioBuffer = await getAudioBufferByFileName(
+        outputNode.context,
+        entry.name,
+        directoryHandle
+      );
+      drumCellMap[entry.name] = new DrumCell(outputNode, audioBuffer);
+    }
   }
 
-  playSample() {
-    const bufferSource = new AudioBufferSourceNode(this._context, {
-      buffer: this._buffer,
-    });
-    const amp = new GainNode(this._context);
-    bufferSource.connect(amp).connect(this._outputNode);
-    bufferSource.start();
+  return drumCellMap;
+};
+
+const bindKeyToDrumCellMap = (drumCellMap) => {
+  const keys = "qwerasdfzxcv".split("");
+  const drumCells = Object.values(drumCellMap);
+  const keyToDrumCellMap = {};
+  for (let i = 0; i < drumCells.length; i++) {
+    keyToDrumCellMap[keys[i]] = drumCells[i];
   }
-}
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key in keyToDrumCellMap) {
+      keyToDrumCellMap[e.key].playSample();
+    }
+  });
+};
+
+const buildMainBus = async (audioContext, directoryHandle) => {
+  const compressor = new DynamicsCompressorNode(audioContext);
+  const irBuffer = await getAudioBufferByFileName(
+    audioContext,
+    "ir-hall.mp3",
+    directoryHandle
+  );
+  const convolver = new ConvolverNode(audioContext, { buffer: irBuffer });
+  const reverbGain = new GainNode(audioContext, { gain: 0.25 });
+
+  compressor.connect(audioContext.destination);
+  convolver.connect(reverbGain).connect(audioContext.destination);
+  compressor.connect(convolver);
+
+  return compressor;
+};
+
+const initializeDrumMachine = async (audioContext) => {
+  const directoryHandle = await window.showDirectoryPicker();
+  const mainBus = await buildMainBus(audioContext, directoryHandle);
+  const drumCellMap = await buildDrumCellMap(mainBus, directoryHandle);
+  await bindKeyToDrumCellMap(drumCellMap);
+};
+
+const audioContext = new AudioContext();
+
+const onLoad = async () => {
+  const $button = document.getElementById("start-audio");
+  $button.disabled = false;
+  $button.addEventListener(
+    "click",
+    async () => {
+      await initializeDrumMachine(audioContext);
+      audioContext.resume();
+      $button.disabled = true;
+      $button.textContent = "재생중...";
+    },
+    false
+  );
+};
+
+window.addEventListener("load", onLoad);
